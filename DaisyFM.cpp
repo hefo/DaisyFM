@@ -36,9 +36,9 @@ float outputGaindB = -60.0f;
 int prevRegion = 0;
 
 void ProcessControls();
-void initFileSystem();
-int initRadioPlayer(int sr);
-float mapToFrequency(float normFreqCtrl);
+void InitFileSystem();
+int InitRadioPlayer(int sr);
+//float mapToFrequency(float normFreqCtrl);
 
 void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size)
 {
@@ -71,8 +71,8 @@ int main(void)
 	gainCtrl.Init(hw.controls[1], -10.0f, 20.0f, Parameter::LINEAR);
 	noiseCtrl.Init(hw.controls[2], -60.0f, -20.0f, Parameter::LINEAR);
 
-	initFileSystem();
-	initRadioPlayer(hw.AudioSampleRate());
+	InitFileSystem();
+	InitRadioPlayer(hw.AudioSampleRate());
 
 	//hw.seed.StartLog(false);
 	hw.StartAdc();
@@ -136,7 +136,7 @@ int main(void)
 	}
 }
 
-void initFileSystem()
+void InitFileSystem()
 {
 	SdmmcHandler::Config sd_config;
 	sd_config.Defaults();
@@ -145,7 +145,7 @@ void initFileSystem()
 	fsi.Init(FatFSInterface::Config::MEDIA_SD);
 }
 
-int initRadioPlayer(int sr)
+int InitRadioPlayer(int sr)
 {
 	FRESULT result;
 	result = f_mount(&fsi.GetSDFileSystem(), "/", 1);  // opt = 1 forces mount now
@@ -170,7 +170,7 @@ int initRadioPlayer(int sr)
 	return 0;
 }
 
-float mapToFrequency(float normFreqCtrl)
+inline float FrequencyMapping(float normFreqCtrl)
 {
 	float centerFrequency = 6000.0f; // Default center frequenc
 	int region = floor(normFreqCtrl * 5.0f);
@@ -192,7 +192,7 @@ void ProcessControls()
 	hw.ProcessAllControls();
 
 	normFreqCtrl = frequancyCtrl.Process();
-	centerFrequency = mapToFrequency(normFreqCtrl);
+	centerFrequency = FrequencyMapping(normFreqCtrl);
 	radioDemodulator.SetCarrierFreq(centerFrequency);
 
 	gainCtrldB = gainCtrl.Process();
