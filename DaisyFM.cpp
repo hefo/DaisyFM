@@ -51,56 +51,6 @@ inline float gauss_approx(uint32_t& s){
     return sum - 6.f; // ~N(0,1)
 }
 
-void float_to_str_1dp(float val, char *buf)
-{
-    // Handle sign
-    if(val < 0)
-    {
-        *buf++ = '-';
-        val = -val;
-    }
-
-    // Integer and fractional parts
-    int intpart = (int)val;
-    int fracpart = (int)((val - intpart) * 10 + 0.5f); // +0.5 for rounding
-
-    // Write integer part
-    char tmp[12];
-    int idx = 0;
-    if(intpart == 0)
-    {
-        tmp[idx++] = '0';
-    }
-    else
-    {
-        while(intpart > 0)
-        {
-            tmp[idx++] = '0' + (intpart % 10);
-            intpart /= 10;
-        }
-        // reverse
-        for(int i = 0; i < idx / 2; i++)
-        {
-            char t = tmp[i];
-            tmp[i] = tmp[idx - 1 - i];
-            tmp[idx - 1 - i] = t;
-        }
-    }
-
-    // Copy integer part
-    for(int i = 0; i < idx; i++)
-        *buf++ = tmp[i];
-
-    // Decimal point
-    *buf++ = '.';
-
-    // Fractional part (single digit)
-    *buf++ = '0' + fracpart;
-
-    // Null terminate
-    *buf = '\0';
-}
-
 struct BiquadDF2T
 {
     // current (active) coefficients
