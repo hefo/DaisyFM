@@ -16,7 +16,7 @@ USE_FATFS = 1
 
 # Size-focused flags
 OPT            = -Os
-USE_LTO        = 1
+#USE_LTO        = 1
 EXTRA_CFLAGS   += -ffunction-sections -fdata-sections
 EXTRA_LDFLAGS  += -Wl,--gc-sections
 #USE_NEWLIB_NANO = 1

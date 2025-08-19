@@ -64,7 +64,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
 int main(void)
 {
 	hw.Init();
-	hw.SetAudioBlockSize(64); // number of samples handled per callback
+	hw.SetAudioBlockSize(128); // number of samples handled per callback
 	hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
 
 	frequancyCtrl.Init(hw.controls[0], 0.0f, 1.0f, Parameter::LINEAR);
@@ -98,13 +98,14 @@ int main(void)
 		hw.display.Fill(false);
 
 		hw.display.SetCursor(1, 0);
-		std::string str  = "FM";
+		std::string str  = "F M  S A M P L E R";
 		char*       cstr = &str[0];
 		hw.display.WriteString(cstr, Font_6x8, true);
 
+
+		hw.display.SetCursor(12, 20);
 		float sudoFreq = 87.5f + normFreqCtrl * 20.5f; // 87.5 MHz to 200 MHz
 		int fracPart = (int)((sudoFreq - (int)sudoFreq) * 10);
-		hw.display.SetCursor(18, 20);
 
 		if (sudoFreq < 100.0f){
 			str = " " + std::to_string((int) sudoFreq) + "." + std::to_string(fracPart);
@@ -113,7 +114,7 @@ int main(void)
 		}
 		
     	hw.display.WriteString(cstr, digitalFont_16x26, true);
-		hw.display.SetCursor(101, 38);
+		hw.display.SetCursor(95, 38);
 		hw.display.WriteString("MHz", Font_6x8, true);
 
 
@@ -121,9 +122,9 @@ int main(void)
 		if (barPerc < 0.0f) barPerc = 0.0f;
 		if (barPerc > 1.0f) barPerc = 1.0f;
 		
-		int barX = 5;
-		int barBottomY = 60;
-		int barHeight = 48;
+		int barX = 123;
+		int barBottomY = 57;
+		int barHeight = 50;
 
 		int meterdB = (int)(barPerc * (float)barHeight);
 
@@ -132,7 +133,7 @@ int main(void)
 		hw.display.DrawLine(barX - 2, barBottomY, barX + 2, barBottomY, true); // -60 dB line
 
 		hw.display.Update();		
-		hw.DelayMs(10);
+		hw.DelayMs(30);
 	}
 }
 
