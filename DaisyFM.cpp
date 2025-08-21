@@ -42,9 +42,6 @@ int prevRegion = 0;
 void ProcessControls();
 void InitFileSystem();
 int InitRadioPlayer(int sr);
-//float mapToFrequency(float normFreqCtrl);
-
-int readRes = -5;
 
 void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size)
 {
@@ -132,7 +129,6 @@ int main(void)
 		hw.display.SetCursor(91, 38);
 		hw.display.WriteString("MHz", Font_6x8, true);
 
-
 		int barX = 123;
 		int barBottomY = 57;
 		int barHeight = 50;
@@ -154,7 +150,7 @@ int main(void)
 		hw.display.DrawLine(barX - 3, barBottomY, barX + 3, barBottomY, true); // -60 dB line
 
 		hw.display.Update();		
-		hw.DelayMs(30);
+		hw.DelayMs(10);
 	}
 }
 
@@ -177,19 +173,12 @@ int InitRadioPlayer(int sr)
 	}
 
 	radioStation1.Init(buffer_1, MAX_BUF_SIZE, sr);
-	
-	int res = radioStation1.SetFile(0);
-	readRes = res;
-	//hw.seed.PrintLine("Result read 1: %d", res);
-
+	radioStation1.SetFile(0);
 	radioStation1.SetCarrierFreq(6000.0f);
 	radioStation1.Play();
 
 	radioStation2.Init(buffer_2, MAX_BUF_SIZE, sr);
-
-	res = radioStation2.SetFile(1);
-	//hw.seed.PrintLine("Result read 2: %d", res);
-	
+	radioStation2.SetFile(1);
 	radioStation2.SetCarrierFreq(18000.0f);
 	radioStation2.Play();
 
@@ -197,7 +186,7 @@ int InitRadioPlayer(int sr)
 	radioDemodulator.SetCarrierFreq(6000.0f);
 
 	radioDemodulator2.Init(sr);
-	radioDemodulator2.SetCarrierFreq(18000.0f);
+	radioDemodulator2.SetCarrierFreq(6000.0f);
 
 	return 0;
 }

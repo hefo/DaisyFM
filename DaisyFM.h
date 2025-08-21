@@ -267,6 +267,7 @@ class RadioStation {
 	void Stream(float& sample_l, float& sample_r){
 			const double L = (double)length;
 			const double rate = pitch; 
+
 			double phase = wrap_phase(start + (double)gSamplesElapsed * rate, L);
 
 			// Linear interpolation
@@ -346,14 +347,19 @@ class RadioStation {
 			return 3; // not a WAVE file
 		}
 
+		// --- Iterate chunks: read fmt first, then data ---
 		bool have_fmt = false;
 		uint16_t num_channels = 0;
 		uint16_t bits_per_sample = 0;
-		uint16_t audio_format = 0;
+		uint16_t audio_format = 0; // 1 = PCM, 3 = IEEE float, etc.
+		uint32_t sample_rate = 0;
+		uint16_t block_align = 0;
+		uint32_t byte_rate = 0;
 
 		uint32_t data_size = 0;
 		DWORD data_pos = 0;
 
+		// We’re currently at offset 12. Loop over chunks.
 		for (;;) {
 			char chunk_id[4];
 			uint32_t chunk_size = 0;
@@ -362,11 +368,14 @@ class RadioStation {
 			if (f_read(&file, &chunk_size, 4, &br) != FR_OK || br != 4) break;
 
 			if (strncmp(chunk_id, "fmt ", 4) == 0) {
+				// Read fmt payload into a small buffer (we only need first 16 bytes for PCM)
+				// chunk_size can be >= 16 (WAVEFORMATEX), so allocate on stack carefully
 				uint8_t hdr[32]; // enough for common PCM/Extensible front part
 				UINT toread = (chunk_size < sizeof(hdr)) ? chunk_size : (UINT)sizeof(hdr);
 				if (f_read(&file, hdr, toread, &br) != FR_OK || br != toread) { f_close(&file); return 2; }
 
 				if (chunk_size > toread) {
+					// skip the rest of fmt payload if larger
 					f_lseek(&file, f_tell(&file) + (chunk_size - toread));
 				}
 
@@ -374,6 +383,9 @@ class RadioStation {
 				if (chunk_size >= 16) {
 					audio_format    = *(uint16_t*)(hdr + 0);
 					num_channels    = *(uint16_t*)(hdr + 2);
+					sample_rate     = *(uint32_t*)(hdr + 4);
+					byte_rate       = *(uint32_t*)(hdr + 8);
+					block_align     = *(uint16_t*)(hdr + 12);
 					bits_per_sample = *(uint16_t*)(hdr + 14);
 					have_fmt = true;
 				}
@@ -404,6 +416,14 @@ class RadioStation {
 			return 5; // unsupported format for this loader
 		}
 
+		// Optional: sanity checks
+		if (block_align != num_channels * (bits_per_sample / 8)) {
+			// malformed header; continue at your own risk
+		}
+		if (byte_rate != sample_rate * block_align) {
+			// malformed header; continue at your own risk
+		}
+
 		// --- Read audio data (interleaved int16 LRLR...) ---
 		f_lseek(&file, data_pos);
 
@@ -411,16 +431,33 @@ class RadioStation {
 		uint32_t max_bytes = maxBufferLength * sizeof(int16_t); // capacity in bytes
 		uint32_t want_bytes = (data_size < max_bytes) ? data_size : max_bytes;
 
+		// Ensure even number of bytes for int16 alignment
+		want_bytes &= ~1u;
+
+		if (want_bytes == 0) {
+			f_close(&file);
+			return 6; // nothing to read
+		}
+
+		if (!buffer_) {
+			f_close(&file);
+			return 7; // no destination buffer
+		}
+
 		if (f_read(&file, buffer_, want_bytes, &br) != FR_OK || br != want_bytes) {
 			f_close(&file);
 			return 8; // read error
 		}
 
+		// bytes -> counts
 		length = size_t(br / sizeof(int16_t) / 2);       // total int16 samples (L+R interleaved)
+
 		f_close(&file);
 		currentFileIndex = fileIndex;
 		return 0;
 	}
+
+
 };
 
 class FMDemodulator {
