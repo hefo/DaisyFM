@@ -15,11 +15,12 @@ BOARD = patch
 USE_FATFS = 1
 
 # Size-focused flags
-OPT            = -Os
-#USE_LTO        = 1
-EXTRA_CFLAGS   += -ffunction-sections -fdata-sections
-EXTRA_LDFLAGS  += -Wl,--gc-sections
-#USE_NEWLIB_NANO = 1
+OPT             = -Os
+USE_LTO         = 1
+EXTRA_CFLAGS   += -flto -ffunction-sections -fdata-sections
+EXTRA_CXXFLAGS += -flto -ffunction-sections -fdata-sections \
+                  -fno-exceptions -fno-rtti -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-use-cxa-atexit -fno-threadsafe-statics
+EXTRA_LDFLAGS  += -flto -Wl,--gc-sections --specs=nano.specs
 
 # Core location, and generic Makefile.
 SYSTEM_FILES_DIR = $(LIBDAISY_DIR)/core
