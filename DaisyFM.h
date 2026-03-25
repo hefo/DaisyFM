@@ -4,7 +4,7 @@
 using namespace daisy;
 using namespace daisysp;
 
-extern uint64_t gSamplesElapsed;
+extern uint32_t gSamplesElapsed;
 
 inline double wrap_phase(double x, double len)
 {
@@ -225,8 +225,8 @@ class RadioStation {
 	float gain = 1.0f;
 	float historyL;
 	float historyR;
-	double start = 0.0;
-	double pitch = 1.0;
+	//double start = 0.0;
+	//double pitch = 1.0;
 
 	public:
 	void Init(int16_t *buffer, uint32_t maxBufferLength, int sr){
@@ -265,11 +265,11 @@ class RadioStation {
 	}
 
 	void Stream(float& sample_l, float& sample_r){
-			const double L = (double)length;
-			const double rate = pitch; 
+			//const double L = (double)length;
+			//const double rate = pitch; 
 
-			double phase = wrap_phase(start + (double)gSamplesElapsed * rate, L);
-
+			//double phase = wrap_phase(start + (double)gSamplesElapsed * rate, L);
+			float phase = fmodf((float)gSamplesElapsed, (float)length);
 			// Linear interpolation
 			size_t i0 = (size_t)phase;
 			double frac = phase - (double)i0;
@@ -463,7 +463,6 @@ class RadioStation {
 class FMDemodulator {
 	private:
 		Phasor carrierPhase;
-		//ComplexOsc carrierOsc;
 		float modulationIndex;
 		int sampleRate;
 		float history_i;
@@ -476,7 +475,6 @@ class FMDemodulator {
 	public:
 
 	void Init(float sr){
-		//carrierOsc.SetFreq(sr, 6000.0f); // Default carrier frequency
 		carrierPhase.Init(sr);
 		carrierPhase.SetFreq(5000.0f); // Default carrier frequency
 		bandFilter_i.setup(sr);
@@ -490,15 +488,11 @@ class FMDemodulator {
 
 	void SetCarrierFreq(float freq){
 		carrierPhase.SetFreq(freq);
-		//carrierOsc.SetFreq(sampleRate, freq);
 		bandFilter_i.setCenterFrequency(freq, 5000.0f, 64);
 		bandFilter_q.setCenterFrequency(freq, 5000.0f, 64);
 	}
 
 	float Demodulate(float rx_i, float rx_q){
-		// carrierOsc.Step(); // Update the oscillator phase
-		// float c_i = carrierOsc.s; // Get the current cos value
-		// float c_q = carrierOsc.c; // Get the current sin value
 
 		float phs = carrierPhase.Process();
 		float c_i = sinf(TWOPI_F*phs);
@@ -507,28 +501,11 @@ class FMDemodulator {
 		float fltrx_i = bandFilter_i.process(rx_i);
 		float fltrx_q = bandFilter_q.process(rx_q);
 
-		//return fltrx_i;
-
 		float cmplxmult_i = fltrx_i * c_i + fltrx_q * c_q;
 		float cmplxmult_q = fltrx_q * c_i - fltrx_i * c_q;
 
-
-		// --- Approach 1: Using complex multiplication and phase derivative (atan is expensive)
-		// float deriv_i = cmplxmult_i * history_i + cmplxmult_q * history_q;
-		// float deriv_q = cmplxmult_q * history_i - cmplxmult_i * history_q;
-
-		// history_i = cmplxmult_i;
-		// history_q = cmplxmult_q;
-
-		//return atan2(deriv_q, deriv_i) * sampleRate / (TWOPI_F * modulationIndex);
-		// float demod = atan2(deriv_q, deriv_i) * sampleRate / (TWOPI_F * modulationIndex);
-		// float dc_blocked = dcBlock.Process(demod);
-		// return SoftLimit(2.0f * outputFilter.process(dc_blocked));
-
-
-		// --- Approach 2: Using classic discriminator: (without atan)
+		// Classic discriminator: (without atan)
 		float zi = cmplxmult_i, zq = cmplxmult_q;
-		//float yi = zi*history_i + zq*history_q;          // real part (unused)
 		float yq = zq*history_i - zi*history_q;          // imag part ~ Δphase
 		float invpow = 1.0f / (zi*zi + zq*zq + 1e-6f);
 		float demod = yq * invpow * 1.0f;         // choose scale to taste
