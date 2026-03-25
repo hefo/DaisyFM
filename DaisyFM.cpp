@@ -32,10 +32,12 @@ uint32_t seed_q = 0x5EED1234u;  // different non-zero seed
 float normFreqCtrl = 0.0f;
 float gainCtrldB = 0.0f;
 float noiseVariance = 0.0f;
-//float centerFrequency = 5000.0f;
 float outputGaindB_l = -60.0f;
 float outputGaindB_r = -60.0f;
 int prevRegion = 0;
+int pendingRegion = -1;
+uint32_t regionHoldMs = 0;
+static const uint32_t REGION_DEBOUNCE_MS = 80;
 
 void ProcessControls();
 void InitFileSystem();
@@ -100,24 +102,31 @@ int main(void)
 	hw.StartAudio(AudioCallback);
 
 	while(1) {
-		int region = floor(normFreqCtrl * 5.0f);
-		if (region != prevRegion)
+		int region = (int)floorf(normFreqCtrl * 5.0f);
+
+		if (region != pendingRegion) {
+			pendingRegion = region;
+			regionHoldMs  = System::GetNow();
+		}
+
+		if (pendingRegion != prevRegion &&
+		    (System::GetNow() - regionHoldMs) >= REGION_DEBOUNCE_MS)
 		{
 			int res = 0;
-			if (region % 2 == 0)
+			if (pendingRegion % 2 == 0)
 			{
-				res = radioStation1.SetFile(region);
+				res = radioStation1.SetFile(pendingRegion);
 				hw.seed.PrintLine("Result read 1: %d", res);
-				res = radioStation2.SetFile(region + 1);
+				res = radioStation2.SetFile(pendingRegion + 1);
 				hw.seed.PrintLine("Result read 2: %d", res);
-			} else 
+			} else
 			{
-				res = radioStation1.SetFile(region + 1);
+				res = radioStation1.SetFile(pendingRegion + 1);
 				hw.seed.PrintLine("Result read 1: %d", res);
-				res = radioStation2.SetFile(region);
+				res = radioStation2.SetFile(pendingRegion);
 				hw.seed.PrintLine("Result read 2: %d", res);
 			}
-			prevRegion = region;
+			prevRegion = pendingRegion;
 		}
 
 		DrawDisplay();
