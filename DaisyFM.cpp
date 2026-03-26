@@ -211,7 +211,7 @@ int InitRadioPlayer(int sr)
 	radioDemodulator.SetCarrierFreq(6000.0f);
 
 	radioDemodulator2.Init(sr);
-	radioDemodulator2.SetCarrierFreq(6000.0f);
+	radioDemodulator2.SetCarrierFreq(18000.0f);
 
 	return 0;
 }

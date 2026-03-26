@@ -128,6 +128,68 @@ class LowPassFilter
     	BiquadDF2T   lp;
 };
 
+struct PreEmphasis {
+    float K     = 7.2f;  // 2 * Fs * tau; tau=75e-6, Fs=48000
+    float x_prev = 0.f;
+    float y_prev = 0.f;
+    void init(float fs, float tau = 75e-6f) { K = 2.f * fs * tau; }
+    inline float process(float x) {
+        float y = (1.f + K) * x + (1.f - K) * x_prev - y_prev;
+        x_prev = x; y_prev = y;
+        return y;
+    }
+};
+
+struct DeEmphasis {
+    float K     = 7.2f;
+    float x_prev = 0.f;
+    float y_prev = 0.f;
+    void init(float fs, float tau = 75e-6f) { K = 2.f * fs * tau; }
+    inline float process(float x) {
+        float y = (x + x_prev - (1.f - K) * y_prev) / (1.f + K);
+        x_prev = x; y_prev = y;
+        return y;
+    }
+};
+
+/* | fn (Hz) | ωn (rad/sample) | a1     | a2      | Character                    |
+|---------|-----------------|--------|---------|------------------------------|
+| 300     | 0.0393          | 0.0556 | 0.00154 | Slow, smooth — vintage feel  |
+| 500     | 0.0654          | 0.0927 | 0.00428 | Balanced — recommended start |
+| 1000    | 0.1309          | 0.1852 | 0.01713 | Fast, responsive              | */
+
+struct PLL {
+    float a1           = 0.1852f;  // proportional gain (fn=500 Hz, zeta=0.707)
+    float a2           = 0.01713f; // integral gain
+    float output_scale = 25.465f;  // Fs / (2*pi*kf); default kf=300 Hz
+    float phi_v        = 0.f;      // VCO phase accumulator
+    float s_int        = 0.f;      // loop integrator state
+
+    void init(float fs, float kf = 300.f, float fn = 500.f, float zeta = 0.707f) {
+        float wn   = TWOPI_F * fn / fs;
+        a1         = 2.f * zeta * wn;
+        a2         = wn * wn;
+        output_scale = fs / (TWOPI_F * kf);
+        phi_v = 0.f; s_int = 0.f;
+    }
+
+    inline float process(float I, float Q) {
+        float cos_phi = cosf(phi_v);
+        float sin_phi = sinf(phi_v);
+        float eps_raw = Q * cos_phi - I * sin_phi;
+
+        float amplitude = sqrtf(I * I + Q * Q) + 1e-10f;
+        float eps = eps_raw / amplitude;
+
+        s_int = s_int + a2 * eps;
+        s_int = fclamp(s_int, -0.5f, 0.5f);  // anti-windup
+        float u = a1 * eps + s_int;
+
+        phi_v = phi_v + u;
+        return u * output_scale;
+    }
+};
+
 class BandFilter
 {
   public:
@@ -208,7 +270,7 @@ class RadioStation {
 	private:
 
 	Phasor carrierPhase;
-	LowPassFilter inputFilterL, inputFilterR;
+	PreEmphasis preEmphL, preEmphR;
 	uint32_t maxBufferLength;
 	size_t length;
 	size_t position;
@@ -237,13 +299,13 @@ class RadioStation {
 		frac = 0.0f;
 		upsamplingFactor = 2;
 		sampleRate = sr;
-		modulationIndex = 500.0f;
+		modulationIndex = 300.0f;
 		historyL = 0.0f;
 		historyR = 0.0f;
 		currentFileIndex = -1;
 
-		inputFilterL.setup(sr);
-		inputFilterR.setup(sr);
+		preEmphL.init((float)sr);
+		preEmphR.init((float)sr);
 		carrierPhase.Init(sr);
 	}
 
@@ -294,8 +356,8 @@ class RadioStation {
 			input_r = 0.0f;
 		}
 		
-		input_l = inputFilterL.process(input_l);
-		input_r = inputFilterR.process(input_r);
+		input_l = preEmphL.process(input_l);
+		input_r = preEmphR.process(input_r);
 
 		float phs = carrierPhase.Process();
 
@@ -463,54 +525,63 @@ class RadioStation {
 class FMDemodulator {
 	private:
 		Phasor carrierPhase;
-		float modulationIndex;
 		int sampleRate;
-		float history_i;
-		float history_q;
 		BandFilter bandFilter_i;
 		BandFilter bandFilter_q;
+		LowPassFilter basebandLP_i;   // baseband LP on I after carrier removal
+		LowPassFilter basebandLP_q;   // baseband LP on Q after carrier removal
+		PLL pll;
+		DeEmphasis deEmph;
 		LowPassFilter outputFilter;
-		DcBlock dcBlock;
 
 	public:
 
 	void Init(float sr){
 		carrierPhase.Init(sr);
-		carrierPhase.SetFreq(5000.0f); // Default carrier frequency
+		carrierPhase.SetFreq(5000.0f);
 		bandFilter_i.setup(sr);
 		bandFilter_q.setup(sr);
+		basebandLP_i.setup(sr);
+		basebandLP_i.setFrequency(10000.f);
+		basebandLP_q.setup(sr);
+		basebandLP_q.setFrequency(10000.f);
+		pll.init(sr, 300.f);          // kf=300 Hz, fn=500 Hz, zeta=0.707
+		deEmph.init(sr);
 		outputFilter.setup(sr);
-		outputFilter.setFrequency(8000.0f); // Default output filter frequency
-		dcBlock.Init(sr);
+		outputFilter.setFrequency(10000.f);
 		sampleRate = sr;
-		modulationIndex = 500.0f;
 	}
 
 	void SetCarrierFreq(float freq){
 		carrierPhase.SetFreq(freq);
-		bandFilter_i.setCenterFrequency(freq, 5000.0f, 64);
-		bandFilter_q.setCenterFrequency(freq, 5000.0f, 64);
+		bandFilter_i.setCenterFrequency(freq, 10400.0f, 64);
+		bandFilter_q.setCenterFrequency(freq, 10400.0f, 64);
 	}
 
 	float Demodulate(float rx_i, float rx_q){
-
 		float phs = carrierPhase.Process();
 		float c_i = sinf(TWOPI_F*phs);
 		float c_q = cosf(TWOPI_F*phs);
 
+		// IF bandpass
 		float fltrx_i = bandFilter_i.process(rx_i);
 		float fltrx_q = bandFilter_q.process(rx_q);
 
-		float cmplxmult_i = fltrx_i * c_i + fltrx_q * c_q;
-		float cmplxmult_q = fltrx_q * c_i - fltrx_i * c_q;
+		// Carrier removal (complex multiply)
+		float zi = fltrx_i * c_i + fltrx_q * c_q;
+		float zq = fltrx_q * c_i - fltrx_i * c_q;
 
-		// Classic discriminator: (without atan)
-		float zi = cmplxmult_i, zq = cmplxmult_q;
-		float yq = zq*history_i - zi*history_q;          // imag part ~ Δphase
-		float invpow = 1.0f / (zi*zi + zq*zq + 1e-6f);
-		float demod = yq * invpow * 1.0f;         // choose scale to taste
-		history_i = zi; history_q = zq;
-		float dc_blocked = dcBlock.Process(demod);
-		return SoftLimit(1.5f * outputFilter.process(dc_blocked));
+		// Baseband lowpass on I and Q
+		zi = basebandLP_i.process(zi);
+		zq = basebandLP_q.process(zq);
+
+		// PLL discriminator
+		float demod = pll.process(zi, zq);
+
+		// De-emphasis
+		demod = deEmph.process(demod);
+
+		// Output lowpass + soft limit (no DC block; PLL has no DC)
+		return SoftLimit(1.5f * outputFilter.process(demod));
 	}
 };
