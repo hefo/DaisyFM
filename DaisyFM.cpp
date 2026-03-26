@@ -140,8 +140,8 @@ void DrawDisplay()
 	hw.display.Fill(false);
 
 	hw.display.SetCursor(1, 0);
-	hw.display.WriteString("F M  S A M P L E R", Font_6x8, true);
-
+	//hw.display.WriteString(" F M  S A M P L E R", Font_6x8, true);
+	hw.display.WriteString("   D A I S Y  F M", Font_6x8, true);
 	hw.display.SetCursor(8, 20);
 	float sudoFreq = 87.5f + normFreqCtrl * 20.5f; // 87.5 MHz to 200 MHz
 	int fracPart = (int)((sudoFreq - (int)sudoFreq) * 10);
@@ -173,6 +173,23 @@ void DrawDisplay()
 	hw.display.DrawRect(barX - 2, barBottomY - meterdB_l, barX - 1, barBottomY, true, true); // Draw the bar
 	hw.display.DrawRect(barX + 1, barBottomY - meterdB_r, barX + 2, barBottomY, true, true); // Draw the bar	
 	hw.display.DrawLine(barX - 3, barBottomY, barX + 3, barBottomY, true); // -60 dB line
+
+	// Tuner indicator
+	const int tunerCenterX = 64;
+	const int tunerBaseY   = 57;
+	const float tunerScale = 100.0f;
+
+	hw.display.DrawLine(1, tunerBaseY, 118, tunerBaseY, true);
+	hw.display.DrawLine(tunerCenterX,     tunerBaseY - 3, tunerCenterX,     tunerBaseY + 5, true);
+	hw.display.DrawLine(tunerCenterX + 1, tunerBaseY - 3, tunerCenterX + 1, tunerBaseY + 5, true);
+
+	for(int i = 0; i <= 5; i++) {
+		float stationNorm = (float)i / 5.0f;
+		int markerX = tunerCenterX + (int)roundf((stationNorm - normFreqCtrl) * tunerScale);
+		if(markerX >= 2 && markerX <= 117 && markerX != tunerCenterX && markerX != tunerCenterX + 1) {
+			hw.display.DrawLine(markerX, tunerBaseY + 1, markerX, tunerBaseY + 5, true);
+		}
+	}
 
 	hw.display.Update();
 }
