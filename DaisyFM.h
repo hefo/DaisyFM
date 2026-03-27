@@ -271,38 +271,25 @@ class RadioStation {
 
 	Phasor carrierPhase;
 	PreEmphasis preEmphL, preEmphR;
-	uint32_t maxBufferLength;
 	size_t length;
 	size_t position;
 	int16_t *buffer_;
-	FIL file;
-	const TCHAR* filename;
 	bool playing;
-	int readIndex;
-	float frac;
-	int upsamplingFactor;
 	int sampleRate;
-	int currentFileIndex;
 	float modulationIndex;
 	float gain = 1.0f;
 	float historyL;
 	float historyR;
-	//double start = 0.0;
-	//double pitch = 1.0;
 
 	public:
-	void Init(int16_t *buffer, uint32_t maxBufferLength, int sr){
-		this->buffer_ = buffer;
-		this->maxBufferLength = maxBufferLength;
+	void Init(int16_t *buffer, int sr){
+		buffer_ = buffer;
 		length = 0;
 		playing = false;
-		frac = 0.0f;
-		upsamplingFactor = 2;
 		sampleRate = sr;
 		modulationIndex = 300.0f;
 		historyL = 0.0f;
 		historyR = 0.0f;
-		currentFileIndex = -1;
 
 		preEmphL.init((float)sr);
 		preEmphR.init((float)sr);
@@ -322,8 +309,17 @@ class RadioStation {
 	}
 	void Stop(){
 		playing = false;
-		readIndex = 0;
-		frac = 0.0f;
+	}
+
+	// Instantly switch to a pre-loaded buffer. ISR-safe: playing=false prevents
+	// the audio callback from reading buffer_/length during the update window.
+	void SetBuffer(int16_t* buf, size_t len) {
+		playing = false;
+		__DMB();
+		buffer_ = buf;
+		length  = len;
+		__DMB();
+		playing = true;
 	}
 
 	void Stream(float& sample_l, float& sample_r){
@@ -371,154 +367,6 @@ class RadioStation {
 		out_i_r = sinf(TWOPI_F*phs + thetaR);
 		out_q_r = cosf(TWOPI_F*phs + thetaR);
 	}
-
-	int SetFile(int fileIndex) {
-		if (fileIndex == currentFileIndex) {
-			return 0; // do nothing
-		}
-
-		switch (fileIndex) {
-			case 0: filename = "radioStation-1.wav"; break;
-			case 1: filename = "radioStation-2.wav"; break;
-			case 2: filename = "radioStation-3.wav"; break;
-			case 3: filename = "radioStation-4.wav"; break;
-			case 4: filename = "radioStation-5.wav"; break;
-			case 5: filename = "radioStation-6.wav"; break;
-			default: filename = "radioStation-1.wav"; break;
-		}
-
-		if (f_open(&file, filename, (FA_OPEN_EXISTING | FA_READ)) != FR_OK) {
-			return 1;
-		}
-
-		// --- Read RIFF header (12 bytes) ---
-		char riff_id[4];
-		uint32_t riff_size = 0;
-		char wave_id[4];
-		UINT br = 0;
-
-		if (f_read(&file, riff_id, 4, &br) != FR_OK || br != 4 ||
-			f_read(&file, &riff_size, 4, &br) != FR_OK || br != 4 ||
-			f_read(&file, wave_id, 4, &br) != FR_OK || br != 4) {
-			f_close(&file);
-			return 2; // I/O error
-		}
-
-		if (strncmp(riff_id, "RIFF", 4) != 0 || strncmp(wave_id, "WAVE", 4) != 0) {
-			f_close(&file);
-			return 3; // not a WAVE file
-		}
-
-		// --- Iterate chunks: read fmt first, then data ---
-		bool have_fmt = false;
-		uint16_t num_channels = 0;
-		uint16_t bits_per_sample = 0;
-		uint16_t audio_format = 0; // 1 = PCM, 3 = IEEE float, etc.
-		uint32_t sample_rate = 0;
-		uint16_t block_align = 0;
-		uint32_t byte_rate = 0;
-
-		uint32_t data_size = 0;
-		DWORD data_pos = 0;
-
-		// We’re currently at offset 12. Loop over chunks.
-		for (;;) {
-			char chunk_id[4];
-			uint32_t chunk_size = 0;
-
-			if (f_read(&file, chunk_id, 4, &br) != FR_OK || br != 4) break;
-			if (f_read(&file, &chunk_size, 4, &br) != FR_OK || br != 4) break;
-
-			if (strncmp(chunk_id, "fmt ", 4) == 0) {
-				// Read fmt payload into a small buffer (we only need first 16 bytes for PCM)
-				// chunk_size can be >= 16 (WAVEFORMATEX), so allocate on stack carefully
-				uint8_t hdr[32]; // enough for common PCM/Extensible front part
-				UINT toread = (chunk_size < sizeof(hdr)) ? chunk_size : (UINT)sizeof(hdr);
-				if (f_read(&file, hdr, toread, &br) != FR_OK || br != toread) { f_close(&file); return 2; }
-
-				if (chunk_size > toread) {
-					// skip the rest of fmt payload if larger
-					f_lseek(&file, f_tell(&file) + (chunk_size - toread));
-				}
-
-				// parse the first 16 bytes (PCM core)
-				if (chunk_size >= 16) {
-					audio_format    = *(uint16_t*)(hdr + 0);
-					num_channels    = *(uint16_t*)(hdr + 2);
-					sample_rate     = *(uint32_t*)(hdr + 4);
-					byte_rate       = *(uint32_t*)(hdr + 8);
-					block_align     = *(uint16_t*)(hdr + 12);
-					bits_per_sample = *(uint16_t*)(hdr + 14);
-					have_fmt = true;
-				}
-
-				// pad byte if odd
-				if (chunk_size & 1) f_lseek(&file, f_tell(&file) + 1);
-
-			} else if (strncmp(chunk_id, "data", 4) == 0) {
-				data_size = chunk_size;
-				data_pos  = f_tell(&file); // start of audio frames
-				// we can break here; optionally continue to scan other chunks if needed
-				break;
-
-			} else {
-				// skip unknown chunk + pad byte if odd
-				f_lseek(&file, f_tell(&file) + chunk_size + (chunk_size & 1));
-			}
-		}
-
-		if (!have_fmt || data_pos == 0) {
-			f_close(&file);
-			return 4; // missing fmt or data
-		}
-
-		// --- Validate expected format: stereo, 16-bit PCM ---
-		if (!(audio_format == 1 /*PCM*/ && num_channels == 2 && bits_per_sample == 16)) {
-			f_close(&file);
-			return 5; // unsupported format for this loader
-		}
-
-		// Optional: sanity checks
-		if (block_align != num_channels * (bits_per_sample / 8)) {
-			// malformed header; continue at your own risk
-		}
-		if (byte_rate != sample_rate * block_align) {
-			// malformed header; continue at your own risk
-		}
-
-		// --- Read audio data (interleaved int16 LRLR...) ---
-		f_lseek(&file, data_pos);
-
-		// Limit read to both the buffer and the chunk size
-		uint32_t max_bytes = maxBufferLength * sizeof(int16_t); // capacity in bytes
-		uint32_t want_bytes = (data_size < max_bytes) ? data_size : max_bytes;
-
-		// Ensure even number of bytes for int16 alignment
-		want_bytes &= ~1u;
-
-		if (want_bytes == 0) {
-			f_close(&file);
-			return 6; // nothing to read
-		}
-
-		if (!buffer_) {
-			f_close(&file);
-			return 7; // no destination buffer
-		}
-
-		if (f_read(&file, buffer_, want_bytes, &br) != FR_OK || br != want_bytes) {
-			f_close(&file);
-			return 8; // read error
-		}
-
-		// bytes -> counts
-		length = size_t(br / sizeof(int16_t) / 2);       // total int16 samples (L+R interleaved)
-
-		f_close(&file);
-		currentFileIndex = fileIndex;
-		return 0;
-	}
-
 
 };
 

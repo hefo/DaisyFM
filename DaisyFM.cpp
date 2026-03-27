@@ -22,9 +22,10 @@ SdmmcHandler   sdcard;
 DIR dir;
 FILINFO fil;
 
-#define MAX_BUF_SIZE 4 * 1048576 // 2 x 4MB
-int16_t DSY_SDRAM_BSS buffer_1[MAX_BUF_SIZE];
-int16_t DSY_SDRAM_BSS buffer_2[MAX_BUF_SIZE];
+#define MAX_BUF_SIZE  (4 * 1048576) // 8 MB per station (4 M int16 elements, ~44 s stereo 48 kHz)
+#define NUM_STATIONS  6
+int16_t DSY_SDRAM_BSS station_buffers[NUM_STATIONS][MAX_BUF_SIZE];
+size_t  station_lengths[NUM_STATIONS];
 uint32_t gSamplesElapsed = 0;
 uint32_t seed_i = 0xA1B2C3D4u;  // any non-zero 32-bit seed
 uint32_t seed_q = 0x5EED1234u;  // different non-zero seed
@@ -43,6 +44,7 @@ void ProcessControls();
 void InitFileSystem();
 void DrawDisplay();
 int InitRadioPlayer(int sr);
+static int LoadWavFile(int fileIndex, int16_t* buf, uint32_t maxElements, size_t* outLength);
 
 void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size)
 {
@@ -112,20 +114,19 @@ int main(void)
 		if (pendingRegion != prevRegion &&
 		    (System::GetNow() - regionHoldMs) >= REGION_DEBOUNCE_MS)
 		{
-			int res = 0;
-			if (pendingRegion % 2 == 0)
-			{
-				res = radioStation1.SetFile(pendingRegion);
-				hw.seed.PrintLine("Result read 1: %d", res);
-				res = radioStation2.SetFile(pendingRegion + 1);
-				hw.seed.PrintLine("Result read 2: %d", res);
-			} else
-			{
-				res = radioStation1.SetFile(pendingRegion + 1);
-				hw.seed.PrintLine("Result read 1: %d", res);
-				res = radioStation2.SetFile(pendingRegion);
-				hw.seed.PrintLine("Result read 2: %d", res);
+			int fileA, fileB;
+			if (pendingRegion % 2 == 0) {
+				fileA = pendingRegion;
+				fileB = pendingRegion + 1;
+			} else {
+				fileA = pendingRegion + 1;
+				fileB = pendingRegion;
 			}
+			if (fileA >= NUM_STATIONS) fileA = NUM_STATIONS - 1;
+			if (fileB >= NUM_STATIONS) fileB = NUM_STATIONS - 1;
+
+			radioStation1.SetBuffer(station_buffers[fileA], station_lengths[fileA]);
+			radioStation2.SetBuffer(station_buffers[fileB], station_lengths[fileB]);
 			prevRegion = pendingRegion;
 		}
 
@@ -202,6 +203,85 @@ void InitFileSystem()
 	fsi.Init(FatFSInterface::Config::MEDIA_SD);
 }
 
+// Load a WAV file by index into buf (up to maxElements int16 values).
+// Sets *outLength to the number of stereo sample-pairs loaded.
+// Returns 0 on success, non-zero on error.
+static int LoadWavFile(int fileIndex, int16_t* buf, uint32_t maxElements, size_t* outLength)
+{
+	const TCHAR* filename;
+	switch (fileIndex) {
+		case 0: filename = "radioStation-1.wav"; break;
+		case 1: filename = "radioStation-2.wav"; break;
+		case 2: filename = "radioStation-3.wav"; break;
+		case 3: filename = "radioStation-4.wav"; break;
+		case 4: filename = "radioStation-5.wav"; break;
+		case 5: filename = "radioStation-6.wav"; break;
+		default: return 1;
+	}
+
+	static FIL file;
+	if (f_open(&file, filename, FA_OPEN_EXISTING | FA_READ) != FR_OK) return 1;
+
+	UINT br = 0;
+	char riff_id[4], wave_id[4];
+	uint32_t riff_size = 0;
+	if (f_read(&file, riff_id,  4, &br) != FR_OK || br != 4 ||
+	    f_read(&file, &riff_size, 4, &br) != FR_OK || br != 4 ||
+	    f_read(&file, wave_id,  4, &br) != FR_OK || br != 4) { f_close(&file); return 2; }
+	if (strncmp(riff_id, "RIFF", 4) != 0 || strncmp(wave_id, "WAVE", 4) != 0)
+		{ f_close(&file); return 3; }
+
+	bool have_fmt = false;
+	uint16_t num_channels = 0, bits_per_sample = 0, audio_format = 0;
+	uint32_t data_size = 0;
+	DWORD data_pos = 0;
+
+	for (;;) {
+		char chunk_id[4];
+		uint32_t chunk_size = 0;
+		if (f_read(&file, chunk_id,   4, &br) != FR_OK || br != 4) break;
+		if (f_read(&file, &chunk_size, 4, &br) != FR_OK || br != 4) break;
+
+		if (strncmp(chunk_id, "fmt ", 4) == 0) {
+			uint8_t hdr[32];
+			UINT toread = (chunk_size < sizeof(hdr)) ? chunk_size : (UINT)sizeof(hdr);
+			if (f_read(&file, hdr, toread, &br) != FR_OK || br != toread)
+				{ f_close(&file); return 2; }
+			if (chunk_size > toread)
+				f_lseek(&file, f_tell(&file) + (chunk_size - toread));
+			if (chunk_size >= 16) {
+				audio_format    = *(uint16_t*)(hdr + 0);
+				num_channels    = *(uint16_t*)(hdr + 2);
+				bits_per_sample = *(uint16_t*)(hdr + 14);
+				have_fmt = true;
+			}
+			if (chunk_size & 1) f_lseek(&file, f_tell(&file) + 1);
+		} else if (strncmp(chunk_id, "data", 4) == 0) {
+			data_size = chunk_size;
+			data_pos  = f_tell(&file);
+			break;
+		} else {
+			f_lseek(&file, f_tell(&file) + chunk_size + (chunk_size & 1));
+		}
+	}
+
+	if (!have_fmt || data_pos == 0) { f_close(&file); return 4; }
+	if (!(audio_format == 1 && num_channels == 2 && bits_per_sample == 16))
+		{ f_close(&file); return 5; }
+
+	uint32_t max_bytes  = maxElements * sizeof(int16_t);
+	uint32_t want_bytes = (data_size < max_bytes) ? data_size : max_bytes;
+	want_bytes &= ~1u;
+	if (want_bytes == 0) { f_close(&file); return 6; }
+
+	if (f_read(&file, buf, want_bytes, &br) != FR_OK || br != want_bytes)
+		{ f_close(&file); return 8; }
+
+	*outLength = size_t(br / sizeof(int16_t) / 2);
+	f_close(&file);
+	return 0;
+}
+
 int InitRadioPlayer(int sr)
 {
 	FRESULT result = FR_NOT_READY;
@@ -209,20 +289,28 @@ int InitRadioPlayer(int sr)
     	result = f_mount(&fsi.GetSDFileSystem(), "/", 1);
     	if (result != FR_OK) hw.DelayMs(100);
 	}
-	if (result != FR_OK) {
-    	// Show error on display and halt or return
-    	return -1;
+	if (result != FR_OK) return -1;
+
+	// Preload all station files into SDRAM with progress shown on OLED
+	for (int i = 0; i < NUM_STATIONS; i++) {
+		hw.display.Fill(false);
+		hw.display.SetCursor(20, 24);
+		char msg[20];
+		snprintf(msg, sizeof(msg), "Loading %d/%d", i + 1, NUM_STATIONS);
+		hw.display.WriteString(msg, Font_6x8, true);
+		hw.display.Update();
+
+		station_lengths[i] = 0;
+		LoadWavFile(i, station_buffers[i], MAX_BUF_SIZE, &station_lengths[i]);
 	}
 
-	radioStation1.Init(buffer_1, MAX_BUF_SIZE, sr);
-	radioStation1.SetFile(0);
+	radioStation1.Init(station_buffers[0], sr);
 	radioStation1.SetCarrierFreq(6000.0f);
-	radioStation1.Play();
+	radioStation1.SetBuffer(station_buffers[0], station_lengths[0]);
 
-	radioStation2.Init(buffer_2, MAX_BUF_SIZE, sr);
-	radioStation2.SetFile(1);
+	radioStation2.Init(station_buffers[1], sr);
 	radioStation2.SetCarrierFreq(18000.0f);
-	radioStation2.Play();
+	radioStation2.SetBuffer(station_buffers[1], station_lengths[1]);
 
 	radioDemodulator.Init(sr);
 	radioDemodulator.SetCarrierFreq(6000.0f);
