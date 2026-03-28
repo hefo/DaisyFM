@@ -177,7 +177,7 @@ struct PLL {
         a2         = wn * wn;
         output_scale = fs / (TWOPI_F * kf);
         phi_v = 0.f; s_int = 0.f;
-        atkCoef    = 1.f - expf(-1.f / (0.200f * fs));  // 200 ms (slow mute)
+        atkCoef    = 1.f - expf(-1.f / (0.150f * fs));  // 200 ms (slow mute)
         relCoef    = 1.f - expf(-1.f / (0.200f * fs));  // 200 ms (slow unmute)
         errSmooth  = 1.f;
         lockGain   = 0.f;

@@ -2,6 +2,7 @@
 #include "daisysp.h"
 #include "extra_fonts.h"
 #include "DaisyFM.h"
+#include <string.h>
 
 using namespace daisy;
 using namespace daisysp;
@@ -25,6 +26,12 @@ FILINFO fil;
 #define MAX_BUF_SIZE  (4 * 1048576) // 8 MB per station (4 M int16 elements, ~44 s stereo 48 kHz)
 #define NUM_STATIONS  6
 int16_t DSY_SDRAM_BSS station_buffers[NUM_STATIONS][MAX_BUF_SIZE];
+
+// Staging buffer in on-chip AXI-SRAM for SDMMC IDMA.
+// SDMMC IDMA on STM32H7 reaches on-chip SRAM via a direct AHB path; writing
+// directly to FMC-connected SDRAM goes through a slower AXI→FMC route that can
+// stall. We DMA here first, then memcpy to SDRAM.
+static uint8_t __attribute__((aligned(32))) sdReadStaging[64 * 1024];
 size_t  station_lengths[NUM_STATIONS];
 uint32_t gSamplesElapsed = 0;
 uint32_t seed_i = 0xA1B2C3D4u;  // any non-zero 32-bit seed
@@ -278,10 +285,22 @@ static int LoadWavFile(int fileIndex, int16_t* buf, uint32_t maxElements, size_t
 	want_bytes &= ~1u;
 	if (want_bytes == 0) { f_close(&file); return 6; }
 
-	if (f_read(&file, buf, want_bytes, &br) != FR_OK || br != want_bytes)
-		{ f_close(&file); return 8; }
+	// Read through on-chip SRAM staging buffer to avoid DMA directly into SDRAM.
+	uint32_t totalRead = 0;
+	while (totalRead < want_bytes) {
+		uint32_t chunk = want_bytes - totalRead;
+		if (chunk > (uint32_t)sizeof(sdReadStaging))
+			chunk = (uint32_t)sizeof(sdReadStaging);
+		UINT chunk_br = 0;
+		if (f_read(&file, sdReadStaging, chunk, &chunk_br) != FR_OK || chunk_br == 0)
+			break;
+		memcpy((uint8_t*)buf + totalRead, sdReadStaging, chunk_br);
+		totalRead += chunk_br;
+		if (chunk_br < chunk) break; // EOF reached early
+	}
+	if (totalRead != want_bytes) { f_close(&file); return 8; }
 
-	*outLength = size_t(br / sizeof(int16_t) / 2);
+	*outLength = size_t(totalRead / sizeof(int16_t) / 2);
 	f_close(&file);
 	return 0;
 }
