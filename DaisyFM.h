@@ -129,10 +129,10 @@ class LowPassFilter
 };
 
 struct PreEmphasis {
-    float K     = 7.2f;  // 2 * Fs * tau; tau=75e-6, Fs=48000
+    float K     = 2.4f;  // 2 * Fs * tau; tau=25e-6, Fs=48000
     float x_prev = 0.f;
     float y_prev = 0.f;
-    void init(float fs, float tau = 75e-6f) { K = 2.f * fs * tau; }
+    void init(float fs, float tau = 25e-6f) { K = 2.f * fs * tau; }
     inline float process(float x) {
         float y = (1.f + K) * x + (1.f - K) * x_prev - y_prev;
         x_prev = x; y_prev = y;
@@ -141,10 +141,10 @@ struct PreEmphasis {
 };
 
 struct DeEmphasis {
-    float K     = 7.2f;
+    float K     = 2.4f;
     float x_prev = 0.f;
     float y_prev = 0.f;
-    void init(float fs, float tau = 75e-6f) { K = 2.f * fs * tau; }
+    void init(float fs, float tau = 25e-6f) { K = 2.f * fs * tau; }
     inline float process(float x) {
         float y = (x + x_prev - (1.f - K) * y_prev) / (1.f + K);
         x_prev = x; y_prev = y;
@@ -165,12 +165,22 @@ struct PLL {
     float phi_v        = 0.f;      // VCO phase accumulator
     float s_int        = 0.f;      // loop integrator state
 
+    // Lock detector
+    float lockGain     = 0.f;      // 0 = muted (unlocked), 1 = open (locked)
+    float errSmooth    = 1.f;      // smoothed |eps|, starts at 1 (fully unlocked)
+    float atkCoef      = 0.00208f; // ~10 ms attack at 48 kHz
+    float relCoef      = 0.000104f;// ~200 ms release at 48 kHz
+
     void init(float fs, float kf = 300.f, float fn = 500.f, float zeta = 0.707f) {
         float wn   = TWOPI_F * fn / fs;
         a1         = 2.f * zeta * wn;
         a2         = wn * wn;
         output_scale = fs / (TWOPI_F * kf);
         phi_v = 0.f; s_int = 0.f;
+        atkCoef    = 1.f - expf(-1.f / (0.200f * fs));  // 200 ms (slow mute)
+        relCoef    = 1.f - expf(-1.f / (0.200f * fs));  // 200 ms (slow unmute)
+        errSmooth  = 1.f;
+        lockGain   = 0.f;
     }
 
     inline float process(float I, float Q) {
@@ -185,7 +195,14 @@ struct PLL {
         s_int = fclamp(s_int, -0.5f, 0.5f);  // anti-windup
         float u = a1 * eps + s_int;
 
-        phi_v = phi_v + u;
+        phi_v = fmodf(phi_v + u, TWOPI_F);
+
+        // Lock detector: asymmetric IIR on |eps| → gain
+        float eps_mag = fabsf(eps);
+        float coef    = (eps_mag > errSmooth) ? atkCoef : relCoef;
+        errSmooth    += coef * (eps_mag - errSmooth);
+        lockGain      = 1.f - fclamp(errSmooth / 0.3f, 0.f, 1.f);
+
         return u * output_scale;
     }
 };
@@ -203,16 +220,15 @@ class BandFilter
     inline float process(float x)
     {
         float y = x;
-        // 4 × high-pass
+        // 3 × high-pass
         y = hp[0].process(y);
         y = hp[1].process(y);
         y = hp[2].process(y);
-        //y = hp[3].process(y);
-        // 4 × low-pass
+        // 3 × low-pass
         y = lp[0].process(y);
         y = lp[1].process(y);
         y = lp[2].process(y);
-        //y = lp[3].process(y);
+
         return y;
     }
 
@@ -271,6 +287,7 @@ class RadioStation {
 
 	Phasor carrierPhase;
 	PreEmphasis preEmphL, preEmphR;
+	LowPassFilter inputLpL, inputLpR;
 	size_t length;
 	size_t position;
 	int16_t *buffer_;
@@ -287,12 +304,16 @@ class RadioStation {
 		length = 0;
 		playing = false;
 		sampleRate = sr;
-		modulationIndex = 300.0f;
+		modulationIndex = 500.0f;
 		historyL = 0.0f;
 		historyR = 0.0f;
 
 		preEmphL.init((float)sr);
 		preEmphR.init((float)sr);
+		inputLpL.setup(sr);
+		inputLpL.setFrequency(8000.f);
+		inputLpR.setup(sr);
+		inputLpR.setFrequency(8000.f);
 		carrierPhase.Init(sr);
 	}
 
@@ -323,10 +344,6 @@ class RadioStation {
 	}
 
 	void Stream(float& sample_l, float& sample_r){
-			//const double L = (double)length;
-			//const double rate = pitch; 
-
-			//double phase = wrap_phase(start + (double)gSamplesElapsed * rate, L);
 			float phase = fmodf((float)gSamplesElapsed, (float)length);
 			// Linear interpolation
 			size_t i0 = (size_t)phase;
@@ -351,19 +368,26 @@ class RadioStation {
 			input_l = 0.0f;
 			input_r = 0.0f;
 		}
+
+		input_l = inputLpL.process(input_l);
+		input_r = inputLpR.process(input_r);
 		
 		input_l = preEmphL.process(input_l);
 		input_r = preEmphR.process(input_r);
 
+		// Soft-limit to prevent overdeviation after pre-emphasis boost
+		input_l = SoftLimit(input_l);
+		input_r = SoftLimit(input_r);
+
 		float phs = carrierPhase.Process();
 
 		float thetaL = historyL + TWOPI_F * modulationIndex / sampleRate * input_l * gain;
-		historyL = thetaL;
+		historyL = fmodf(thetaL, TWOPI_F);
 		out_i_l = sinf(TWOPI_F*phs + thetaL);
 		out_q_l = cosf(TWOPI_F*phs + thetaL);
 
 		float thetaR = historyR + TWOPI_F * modulationIndex / sampleRate * input_r * gain;
-		historyR = thetaR;
+		historyR = fmodf(thetaR, TWOPI_F);
 		out_i_r = sinf(TWOPI_F*phs + thetaR);
 		out_q_r = cosf(TWOPI_F*phs + thetaR);
 	}
@@ -390,10 +414,10 @@ class FMDemodulator {
 		bandFilter_i.setup(sr);
 		bandFilter_q.setup(sr);
 		basebandLP_i.setup(sr);
-		basebandLP_i.setFrequency(10000.f);
+		basebandLP_i.setFrequency(4000.f);
 		basebandLP_q.setup(sr);
-		basebandLP_q.setFrequency(10000.f);
-		pll.init(sr, 300.f);          // kf=300 Hz, fn=500 Hz, zeta=0.707
+		basebandLP_q.setFrequency(4000.f);
+		pll.init(sr, 500.f);          // kf=300 Hz, fn=500 Hz, zeta=0.707
 		deEmph.init(sr);
 		outputFilter.setup(sr);
 		outputFilter.setFrequency(10000.f);
@@ -426,10 +450,13 @@ class FMDemodulator {
 		// PLL discriminator
 		float demod = pll.process(zi, zq);
 
+		// Soft mute: attenuate output when PLL is not locked
+		demod *= pll.lockGain;
+
 		// De-emphasis
 		demod = deEmph.process(demod);
 
 		// Output lowpass + soft limit (no DC block; PLL has no DC)
-		return SoftLimit(1.5f * outputFilter.process(demod));
+		return SoftLimit(1.1f * outputFilter.process(demod));
 	}
 };

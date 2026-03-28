@@ -30,6 +30,10 @@ uint32_t gSamplesElapsed = 0;
 uint32_t seed_i = 0xA1B2C3D4u;  // any non-zero 32-bit seed
 uint32_t seed_q = 0x5EED1234u;  // different non-zero seed
 
+//Frequency knob calibration
+static constexpr float freqPotMin = 0.05f;
+static constexpr float freqPotMax = 0.95f;
+
 float normFreqCtrl = 0.0f;
 float gainCtrldB = 0.0f;
 float noiseVariance = 0.0f;
@@ -343,6 +347,7 @@ void ProcessControls()
 	hw.ProcessAllControls();
 
 	normFreqCtrl = frequancyCtrl.Process();
+	normFreqCtrl = fclamp((normFreqCtrl - freqPotMin) / (freqPotMax - freqPotMin), 0.0f, 1.0f);
 	float centerFrequency = FrequencyMapping(normFreqCtrl);
 	radioDemodulator.SetCarrierFreq(centerFrequency);
 	radioDemodulator2.SetCarrierFreq(centerFrequency);
