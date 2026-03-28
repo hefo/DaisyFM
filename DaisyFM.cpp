@@ -191,14 +191,14 @@ void DrawDisplay()
 	const int tunerBaseY   = 57;
 	const float tunerScale = 100.0f;
 
-	hw.display.DrawLine(1, tunerBaseY, 118, tunerBaseY, true);
+	hw.display.DrawLine(12, tunerBaseY, 115, tunerBaseY, true);
 	hw.display.DrawLine(tunerCenterX,     tunerBaseY - 3, tunerCenterX,     tunerBaseY + 5, true);
 	hw.display.DrawLine(tunerCenterX + 1, tunerBaseY - 3, tunerCenterX + 1, tunerBaseY + 5, true);
 
 	for(int i = 0; i <= 5; i++) {
 		float stationNorm = (float)i / 5.0f;
 		int markerX = tunerCenterX + (int)roundf((stationNorm - normFreqCtrl) * tunerScale);
-		if(markerX >= 2 && markerX <= 117 && markerX != tunerCenterX && markerX != tunerCenterX + 1) {
+		if(markerX >= 13 && markerX <= 114 && markerX != tunerCenterX && markerX != tunerCenterX + 1) {
 			hw.display.DrawLine(markerX, tunerBaseY + 1, markerX, tunerBaseY + 5, true);
 		}
 	}
